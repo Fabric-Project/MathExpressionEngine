@@ -58,6 +58,7 @@ public enum Vocabulary {
         .filter { !$0.isBracket }
         .map(\.rawValue)
 
-    /// What starts a comment. The language has line comments only.
+    /// What starts a comment. The language has line comments only, ended by
+    /// any newline.
     public static let lineComment: String = Lexer.lineComment
 }

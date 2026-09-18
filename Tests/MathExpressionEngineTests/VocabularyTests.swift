@@ -45,6 +45,22 @@ import Testing
         }
     }
 
+    /// A CRLF is a single `Character`, equal to neither "\n" nor "\r", so a
+    /// comment that scanned for "\n" ran to the end of the source and took
+    /// every following statement with it — silently, since the result still
+    /// compiled. Expressions arrive pasted, so they arrive with CRLFs.
+    @Test func aCommentEndsAtAnyKindOfNewline() {
+        for newline in ["\n", "\r\n", "\r"] {
+            let commented = compile("out y = 1; \(Vocabulary.lineComment) ignored\(newline)out z = 2")
+            #expect(commented.isValid, "\(commented.diagnostics)")
+            #expect(commented.interface.outputs.count == 2,
+                    "a comment swallowed the statement after a \(newline.debugDescription) newline")
+
+            let plain = compile("out y = 1;\(newline)out z = 2")
+            #expect(plain.isValid, "a \(newline.debugDescription) newline is not whitespace: \(plain.diagnostics)")
+        }
+    }
+
     @Test func everyPublishedNameLexesAsOneIdentifier() {
         for name in Vocabulary.keywords + Vocabulary.typeNames + Vocabulary.constants + Vocabulary.functions {
             var lexer = Lexer(name)

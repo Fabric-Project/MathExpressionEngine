@@ -125,7 +125,9 @@ struct Lexer {
         while i < chars.count {
             let c = chars[i]
 
-            if c == " " || c == "\t" || c == "\n" || c == "\r" {
+            // `isNewline` rather than a list, because a CRLF is one Character
+            // and equals neither "\n" nor "\r".
+            if c == " " || c == "\t" || c.isNewline {
                 i += 1
                 continue
             }
@@ -133,7 +135,7 @@ struct Lexer {
             // A comment runs from its marker to the end of the line.
             if c == Self.lineCommentCharacters.first,
                chars[i...].starts(with: Self.lineCommentCharacters) {
-                while i < chars.count && chars[i] != "\n" { i += 1 }
+                while i < chars.count && !chars[i].isNewline { i += 1 }
                 continue
             }
 
