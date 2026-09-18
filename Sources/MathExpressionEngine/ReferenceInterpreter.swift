@@ -106,8 +106,8 @@ enum ReferenceInterpreter {
             vs.reserveCapacity(args.count)
             for arg in args { vs.append(try eval(arg, inputs, locals)) }
 
-            if Builtins.isConstructor(name) {
-                let width = name == "vec2" ? 2 : (name == "vec3" ? 3 : 4)
+            if let constructed = ValueType.Base.constructed(name) {
+                let width = constructed.width
                 if vs.count == 1 { return EngineValue.splat(width, vs[0].scalar) }
                 switch width {
                 case 2:  return EngineValue.construct2(vs[0].scalar, vs[1].scalar)
