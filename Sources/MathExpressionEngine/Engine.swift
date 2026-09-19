@@ -34,11 +34,19 @@ public func compile(_ source: String) -> CompileResult {
     var program: Program? = nil
     if let body, !diagnostics.contains(where: { $0.severity == .error }) {
         let tape = lower(body)
+        let hasScalarFastPath = tape.supportsScalarFastPath(interface: interface)
         program = Program(
             outputCount: tape.outputRegisters.count,
+            hasScalarFastPath: hasScalarFastPath,
             runValues: { @Sendable (inputs: [String: EngineValue]) throws(EvalError) -> [EngineValue] in
                 try runTapeValues(tape, inputs)
-            }
+            },
+            runScalarFirst: hasScalarFastPath ? { @Sendable (inputs: [String: Float]) throws(EvalError) -> Float in
+                try runScalarTapeFirst(tape, inputs)
+            } : nil,
+            runScalarAll: hasScalarFastPath ? { @Sendable (inputs: [String: Float]) throws(EvalError) -> [Float] in
+                try runScalarTapeValues(tape, inputs)
+            } : nil
         )
     }
 
@@ -54,9 +62,12 @@ func compileReferenceInterpreter(_ source: String) -> CompileResult {
     if let body, !diagnostics.contains(where: { $0.severity == .error }) {
         program = Program(
             outputCount: interface.outputs.count,
+            hasScalarFastPath: false,
             runValues: { @Sendable (inputs: [String: EngineValue]) throws(EvalError) -> [EngineValue] in
                 try ReferenceInterpreter.evalBody(body, inputs)
-            }
+            },
+            runScalarFirst: nil,
+            runScalarAll: nil
         )
     }
 

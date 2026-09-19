@@ -8,6 +8,9 @@
 //  sub-tape recursively.
 //
 
+import Dispatch
+import Foundation
+
 enum EngineLimits {
     static let maxArrayElements = 1 << 20   // guardrail against runaway comprehensions
 }
@@ -232,6 +235,22 @@ func lower(_ body: Body) -> Tape {
 
 // MARK: - Execution
 
+private final class EngineValueOutputBuffer: @unchecked Sendable {
+    private var values: [EngineValue]
+
+    init(count: Int) {
+        values = [EngineValue](repeating: .float(0), count: count)
+    }
+
+    func set(_ value: EngineValue, at index: Int) {
+        values[index] = value
+    }
+
+    func take() -> [EngineValue] {
+        values
+    }
+}
+
 private func executeInstrs(_ instructions: [Instr], _ r: inout [EngineValue], base: Int, constants: [Float]) throws(EvalError) {
     for ins in instructions {
         switch ins {
@@ -263,9 +282,12 @@ private func executeInstrs(_ instructions: [Instr], _ r: inout [EngineValue], ba
             r[base + dst] = EngineValue.swizzle(r[base + src], i0, i1, i2, i3, count: count)
 
         case .makeArray(let dst, let srcs):
-            var els: [EngineValue] = []
-            els.reserveCapacity(srcs.count)
-            for s in srcs { els.append(r[base + s]) }
+            var els = [EngineValue](repeating: .float(0), count: srcs.count)
+            els.withUnsafeMutableBufferPointer { buffer in
+                for i in srcs.indices {
+                    buffer[i] = r[base + srcs[i]]
+                }
+            }
             r[base + dst] = .array(els)
 
         case .index(let dst, let baseReg, let idxReg):
@@ -286,27 +308,59 @@ private func executeInstrs(_ instructions: [Instr], _ r: inout [EngineValue], ba
                 guard count <= EngineLimits.maxArrayElements else {
                     throw EvalError.limitExceeded("comprehension produced \(count) elements (max \(EngineLimits.maxArrayElements))")
                 }
-                var els: [EngineValue] = []
-                els.reserveCapacity(count)
-                var k = start
-                while k < endExclusive {
-                    r[base + loopVar] = .float(Float(k))
-                    try executeInstrs(body, &r, base: base, constants: constants)
-                    els.append(r[base + result])
-                    k += 1
+                
+                // If we have this many items or more, we use dispatch concurrent perform to get embarassingly parallel
+                let concurrentBreakPoint = 512
+                if count >= concurrentBreakPoint, body.supportsScalarFastPath {
+                    let output = EngineValueOutputBuffer(count: count)
+                    let registerSnapshot = r.map(\.scalar)
+                    let registerCount = registerSnapshot.count
+                    let workerCount = Swift.min(count, Swift.max(1, ProcessInfo.processInfo.activeProcessorCount))
+                    let chunkSize = (count + workerCount - 1) / workerCount
+
+                    DispatchQueue.concurrentPerform(iterations: workerCount) { worker in
+                        let chunkStart = worker * chunkSize
+                        let chunkEnd = Swift.min(count, chunkStart + chunkSize)
+                        guard chunkStart < chunkEnd else { return }
+
+                        withUnsafeTemporaryAllocation(of: Float.self, capacity: registerCount) { scratch in
+                            for i in 0..<registerCount { scratch[i] = registerSnapshot[i] }
+
+                            var outputIndex = chunkStart
+                            var k = start + chunkStart
+                            while outputIndex < chunkEnd {
+                                scratch[base + loopVar] = Float(k)
+                                executeScalarInstrs(body, scratch, base: base, constants: constants)
+                                output.set(.float(scratch[base + result]), at: outputIndex)
+                                outputIndex += 1
+                                k += 1
+                            }
+                        }
+                    }
+                    r[base + dst] = .array(output.take())
+                } else {
+                    var els = [EngineValue](repeating: .float(0), count: count)
+                    var k = start
+                    var outputIndex = 0
+                    while k < endExclusive {
+                        r[base + loopVar] = .float(Float(k))
+                        try executeInstrs(body, &r, base: base, constants: constants)
+                        els[outputIndex] = r[base + result]
+                        k += 1
+                        outputIndex += 1
+                    }
+                    r[base + dst] = .array(els)
                 }
-                r[base + dst] = .array(els)
             }
 
         case .mapComprehension(let dst, let indexVar, let elemVar, let source, let body, let result):
             let els = r[base + source].arrayElements ?? []
-            var out: [EngineValue] = []
-            out.reserveCapacity(els.count)
-            for (k, el) in els.enumerated() {
+            var out = [EngineValue](repeating: .float(0), count: els.count)
+            for k in els.indices {
                 if let indexVar { r[base + indexVar] = .float(Float(k)) }
-                r[base + elemVar] = el
+                r[base + elemVar] = els[k]
                 try executeInstrs(body, &r, base: base, constants: constants)
-                out.append(r[base + result])
+                out[k] = r[base + result]
             }
             r[base + dst] = .array(out)
         }
@@ -329,4 +383,86 @@ func runTapeValues(_ tape: Tape, _ inputs: [String: EngineValue]) throws(EvalErr
     try executeInstrs(tape.instructions, &registers, base: inputCount, constants: tape.constants)
 
     return tape.outputRegisters.map { registers[inputCount + $0.register] }
+}
+
+private func executeScalarInstrs(_ instructions: [Instr], _ r: UnsafeMutableBufferPointer<Float>, base: Int, constants: [Float]) {
+    for ins in instructions {
+        switch ins {
+        case .loadConst(let dst, let ci):
+            r[base + dst] = constants[ci]
+        case .loadInput(let dst, let ii):
+            r[base + dst] = r[ii]
+        case .negate(let dst, let src):
+            r[base + dst] = -r[base + src]
+        case .binary(let op, let dst, let lhs, let rhs):
+            r[base + dst] = EngineValue.scalarBinary(op, r[base + lhs], r[base + rhs])
+        case .call0(let id, let dst):
+            r[base + dst] = Builtins.evaluate(id, 0, 0, 0)
+        case .call1(let id, let dst, let a):
+            r[base + dst] = Builtins.evaluate(id, r[base + a], 0, 0)
+        case .call2(let id, let dst, let a, let b):
+            r[base + dst] = Builtins.evaluate(id, r[base + a], r[base + b], 0)
+        case .call3(let id, let dst, let a, let b, let c):
+            r[base + dst] = Builtins.evaluate(id, r[base + a], r[base + b], r[base + c])
+        case .construct2, .construct3, .construct4, .splat, .swizzle,
+             .makeArray, .index, .comprehension, .mapComprehension:
+            // Scalar fast-path eligibility excludes these instructions.
+            break
+        }
+    }
+}
+
+func runScalarTapeValues(_ tape: Tape, _ inputs: [String: Float]) throws(EvalError) -> [Float] {
+    let inputCount = tape.inputOrder.count
+    let registerCount = inputCount + tape.registerCount
+    var missingInput: String?
+
+    let outputs = withUnsafeTemporaryAllocation(of: Float.self, capacity: registerCount) { registers in
+        registers.initialize(repeating: 0)
+
+        var i = 0
+        while i < inputCount {
+            let name = tape.inputOrder[i]
+            guard let value = inputs[name] else {
+                missingInput = name
+                return [Float]()
+            }
+            registers[i] = value
+            i += 1
+        }
+
+        executeScalarInstrs(tape.instructions, registers, base: inputCount, constants: tape.constants)
+        return tape.outputRegisters.map { registers[inputCount + $0.register] }
+    }
+
+    if let missingInput { throw EvalError.missingInput(missingInput) }
+    return outputs
+}
+
+func runScalarTapeFirst(_ tape: Tape, _ inputs: [String: Float]) throws(EvalError) -> Float {
+    let inputCount = tape.inputOrder.count
+    let registerCount = inputCount + tape.registerCount
+    var missingInput: String?
+
+    let output = withUnsafeTemporaryAllocation(of: Float.self, capacity: registerCount) { registers in
+        registers.initialize(repeating: 0)
+
+        var i = 0
+        while i < inputCount {
+            let name = tape.inputOrder[i]
+            guard let value = inputs[name] else {
+                missingInput = name
+                return Float.nan
+            }
+            registers[i] = value
+            i += 1
+        }
+
+        executeScalarInstrs(tape.instructions, registers, base: inputCount, constants: tape.constants)
+        guard let output = tape.outputRegisters.first else { return .nan }
+        return registers[inputCount + output.register]
+    }
+
+    if let missingInput { throw EvalError.missingInput(missingInput) }
+    return output
 }

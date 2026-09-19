@@ -306,22 +306,34 @@ public struct CompileResult: Sendable {
 
     /// The first output as a typed value.
     public func evaluateValue(_ inputs: [String: Float]) throws(EvalError) -> EngineValue {
-        try evaluateValue(with: inputs.mapValues { EngineValue.float($0) })
+        if let program, let runScalarFirst = program.runScalarFirst {
+            return .float(try runScalarFirst(inputs))
+        }
+        return try evaluateValue(with: inputs.mapValues { EngineValue.float($0) })
     }
 
     /// All outputs as typed values, in `interface.outputs` order.
     public func evaluateValues(_ inputs: [String: Float]) throws(EvalError) -> [EngineValue] {
-        try evaluateValues(with: inputs.mapValues { EngineValue.float($0) })
+        if let program, let runScalarAll = program.runScalarAll {
+            return try runScalarAll(inputs).map { .float($0) }
+        }
+        return try evaluateValues(with: inputs.mapValues { EngineValue.float($0) })
     }
 
     /// The first output as a `Float` (its scalar / first component). Convenience.
     public func evaluate(_ inputs: [String: Float]) throws(EvalError) -> Float {
-        try evaluateValue(inputs).scalar
+        if let program, let runScalarFirst = program.runScalarFirst {
+            return try runScalarFirst(inputs)
+        }
+        return try evaluateValue(inputs).scalar
     }
 
     /// All outputs as `Float` (scalar / first component each). Convenience.
     public func evaluateAll(_ inputs: [String: Float]) throws(EvalError) -> [Float] {
-        try evaluateValues(inputs).map(\.scalar)
+        if let program, let runScalarAll = program.runScalarAll {
+            return try runScalarAll(inputs)
+        }
+        return try evaluateValues(inputs).map(\.scalar)
     }
 }
 
@@ -329,5 +341,8 @@ public struct CompileResult: Sendable {
 /// test oracle). Produces all outputs as typed values in source order.
 struct Program: Sendable {
     let outputCount: Int
+    let hasScalarFastPath: Bool
     let runValues: @Sendable ([String: EngineValue]) throws(EvalError) -> [EngineValue]
+    let runScalarFirst: (@Sendable ([String: Float]) throws(EvalError) -> Float)?
+    let runScalarAll: (@Sendable ([String: Float]) throws(EvalError) -> [Float])?
 }
