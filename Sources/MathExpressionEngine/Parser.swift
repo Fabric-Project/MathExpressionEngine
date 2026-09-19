@@ -47,7 +47,7 @@ struct Parser {
             guard let item = parseItem() else { return nil }
             items.append(item)
 
-            if case .semicolon = current.kind {
+            if case .op(.semicolon) = current.kind {
                 advance()
                 if case .eof = current.kind { break }   // trailing `;` is fine
                 continue
@@ -65,7 +65,7 @@ struct Parser {
 
     private mutating func parseItem() -> ParseItem? {
         // Input declaration: `in name: Type`
-        if case .identifier("in") = current.kind {
+        if case .identifier(Keyword.in.rawValue) = current.kind {
             let keywordSpan = current.span
             advance()
             guard case .identifier(let name) = current.kind else {
@@ -74,7 +74,7 @@ struct Parser {
                 return nil
             }
             advance()
-            guard case .colon = current.kind else {
+            guard case .op(.colon) = current.kind else {
                 diagnostics.append(Diagnostic(code: .expectedColon, severity: .error,
                                               message: "Expected `:` and a type after `in \(name)`.", span: current.span))
                 return nil
@@ -84,8 +84,9 @@ struct Parser {
             return .input(name, type, merge(keywordSpan, current.span))
         }
 
-        if case .identifier(let keyword) = current.kind, keyword == "let" || keyword == "out" {
-            let isOutput = (keyword == "out")
+        if case .identifier(let keyword) = current.kind,
+           keyword == Keyword.let.rawValue || keyword == Keyword.out.rawValue {
+            let isOutput = (keyword == Keyword.out.rawValue)
             let keywordSpan = current.span
             advance()
 
@@ -97,7 +98,7 @@ struct Parser {
             }
             advance()
 
-            guard case .equals = current.kind else {
+            guard case .op(.equals) = current.kind else {
                 diagnostics.append(Diagnostic(code: .expectedEquals, severity: .error,
                                               message: "Expected `=` after `\(keyword) \(name)`.",
                                               span: current.span))
@@ -123,23 +124,16 @@ struct Parser {
             return nil
         }
         let baseSpan = current.span
-        var type: ValueType
-        switch base {
-        case "float":     type = .float
-        case "vec2":      type = .vec2
-        case "vec3":      type = .vec3
-        case "vec4":      type = .vec4
-        case "transform": type = .transform
-        case "quat":      type = .quat
-        default:
+        guard let named = ValueType.Base(rawValue: base) else {
             diagnostics.append(Diagnostic(code: .unknownType, severity: .error,
                                           message: "Unknown type `\(base)`.", span: baseSpan))
             return nil
         }
+        var type = named.type
         advance()
-        while case .lbracket = current.kind {
+        while case .op(.lbracket) = current.kind {
             advance()
-            guard case .rbracket = current.kind else {
+            guard case .op(.rbracket) = current.kind else {
                 diagnostics.append(Diagnostic(code: .unknownType, severity: .error,
                                               message: "Expected `]` to close an array type.", span: current.span))
                 return nil
@@ -205,8 +199,8 @@ struct Parser {
         while true {
             let op: BinaryOp
             switch current.kind {
-            case .plus:  op = .add
-            case .minus: op = .sub
+            case .op(.plus):  op = .add
+            case .op(.minus): op = .sub
             default:     return left
             }
             advance()
@@ -220,9 +214,9 @@ struct Parser {
         while true {
             let op: BinaryOp
             switch current.kind {
-            case .star:    op = .mul
-            case .slash:   op = .div
-            case .percent: op = .mod
+            case .op(.star):    op = .mul
+            case .op(.slash):   op = .div
+            case .op(.percent): op = .mod
             default:       return left
             }
             advance()
@@ -232,13 +226,13 @@ struct Parser {
     }
 
     private mutating func parseUnary() -> Expr? {
-        if case .minus = current.kind {
+        if case .op(.minus) = current.kind {
             let s = current.span
             advance()
             guard let operand = parseUnary() else { return nil }
             return .negate(operand, merge(s, operand.span))
         }
-        if case .plus = current.kind {          // unary plus: no-op
+        if case .op(.plus) = current.kind {          // unary plus: no-op
             advance()
             return parseUnary()
         }
@@ -247,7 +241,7 @@ struct Parser {
 
     private mutating func parsePower() -> Expr? {
         guard let base = parsePostfix() else { return nil }
-        if case .caret = current.kind {
+        if case .op(.caret) = current.kind {
             advance()
             // Right operand is a unary so `2 ^ -3` parses; recursion gives right-assoc.
             guard let exponent = parseUnary() else { return nil }
@@ -260,7 +254,7 @@ struct Parser {
     private mutating func parsePostfix() -> Expr? {
         guard var expr = parsePrimary() else { return nil }
         while true {
-            if case .dot = current.kind {
+            if case .op(.dot) = current.kind {
                 advance()
                 guard case .identifier(let chars) = current.kind else {
                     diagnostics.append(Diagnostic(code: .badSwizzle, severity: .error,
@@ -271,10 +265,10 @@ struct Parser {
                 let span = merge(expr.span, current.span)
                 advance()
                 expr = .swizzle(expr, chars, span)
-            } else if case .lbracket = current.kind {
+            } else if case .op(.lbracket) = current.kind {
                 advance()
                 guard let idx = parseAdditive() else { return nil }
-                guard case .rbracket = current.kind else {
+                guard case .op(.rbracket) = current.kind else {
                     diagnostics.append(Diagnostic(code: .unmatchedParen, severity: .error,
                                                   message: "Expected `]` to close the index.", span: current.span))
                     return nil
@@ -295,7 +289,7 @@ struct Parser {
         let startSpan = current.span
         advance()   // consume `[`
 
-        if case .rbracket = current.kind {
+        if case .op(.rbracket) = current.kind {
             diagnostics.append(Diagnostic(code: .emptyArray, severity: .error,
                                           message: "An empty array `[]` has no element type — add at least one element.",
                                           span: startSpan))
@@ -306,13 +300,13 @@ struct Parser {
 
         // Comprehension over a range `[ body for i in lo (.. | ..<) hi ]`, or
         // over an array `[ body for p in arrayExpr ]`.
-        if case .identifier("for") = current.kind {
+        if case .identifier(Keyword.for.rawValue) = current.kind {
             advance()
 
             // Loop pattern: a single name, or an enumerate pair `(index, element)`.
             var indexVar: String? = nil
             let elemVar: String
-            if case .lparen = current.kind {
+            if case .op(.lparen) = current.kind {
                 advance()
                 guard case .identifier(let iv) = current.kind else {
                     diagnostics.append(Diagnostic(code: .expectedName, severity: .error,
@@ -320,7 +314,7 @@ struct Parser {
                     return nil
                 }
                 advance()
-                guard case .comma = current.kind else {
+                guard case .op(.comma) = current.kind else {
                     diagnostics.append(Diagnostic(code: .expectedName, severity: .error,
                                                   message: "Expected `,` between the index and element names.", span: current.span))
                     return nil
@@ -332,7 +326,7 @@ struct Parser {
                     return nil
                 }
                 advance()
-                guard case .rparen = current.kind else {
+                guard case .op(.rparen) = current.kind else {
                     diagnostics.append(Diagnostic(code: .unmatchedParen, severity: .error,
                                                   message: "Expected `)` to close the `(index, element)` pattern.", span: current.span))
                     return nil
@@ -349,7 +343,7 @@ struct Parser {
                 elemVar = lv
             }
 
-            guard case .identifier("in") = current.kind else {
+            guard case .identifier(Keyword.in.rawValue) = current.kind else {
                 diagnostics.append(Diagnostic(code: .expectedName, severity: .error,
                                               message: "Expected `in` after the loop variable.", span: current.span))
                 return nil
@@ -360,10 +354,10 @@ struct Parser {
             // A `..`/`..<` here means a numeric range; otherwise `source` is the
             // array being iterated.
             let inclusive: Bool
-            if case .dotDotLess = current.kind { inclusive = false; advance() }
-            else if case .dotDot = current.kind { inclusive = true; advance() }
+            if case .op(.dotDotLess) = current.kind { inclusive = false; advance() }
+            else if case .op(.dotDot) = current.kind { inclusive = true; advance() }
             else {
-                guard case .rbracket = current.kind else {
+                guard case .op(.rbracket) = current.kind else {
                     diagnostics.append(Diagnostic(code: .unmatchedParen, severity: .error,
                                                   message: "Expected `]` to close the comprehension.", span: current.span))
                     return nil
@@ -383,7 +377,7 @@ struct Parser {
             }
 
             guard let hi = parseAdditive() else { return nil }
-            guard case .rbracket = current.kind else {
+            guard case .op(.rbracket) = current.kind else {
                 diagnostics.append(Diagnostic(code: .unmatchedParen, severity: .error,
                                               message: "Expected `]` to close the comprehension.", span: current.span))
                 return nil
@@ -395,12 +389,12 @@ struct Parser {
 
         // Array literal: `[ first (, expr)* ]`
         var elements = [first]
-        while case .comma = current.kind {
+        while case .op(.comma) = current.kind {
             advance()
             guard let e = parseAdditive() else { return nil }
             elements.append(e)
         }
-        guard case .rbracket = current.kind else {
+        guard case .op(.rbracket) = current.kind else {
             diagnostics.append(Diagnostic(code: .unmatchedParen, severity: .error,
                                           message: "Expected `]` to close the array.", span: current.span))
             return nil
@@ -418,20 +412,20 @@ struct Parser {
 
         case .identifier(let name):
             let s = current.span; advance()
-            if case .lparen = current.kind {
+            if case .op(.lparen) = current.kind {
                 advance()
                 var args: [Expr] = []
-                if case .rparen = current.kind {
+                if case .op(.rparen) = current.kind {
                     // zero-argument call
                 } else {
                     while true {
                         guard let arg = parseAdditive() else { return nil }
                         args.append(arg)
-                        if case .comma = current.kind { advance(); continue }
+                        if case .op(.comma) = current.kind { advance(); continue }
                         break
                     }
                 }
-                guard case .rparen = current.kind else {
+                guard case .op(.rparen) = current.kind else {
                     diagnostics.append(Diagnostic(code: .unmatchedParen, severity: .error,
                                                   message: "Expected `)` to close `\(name)(`.",
                                                   span: current.span))
@@ -441,17 +435,17 @@ struct Parser {
                 return .call(name, args, merge(s, end))
             }
             // Inline typed input: `name: Type` (e.g. `p: vec3`).
-            if case .colon = current.kind {
+            if case .op(.colon) = current.kind {
                 advance()
                 guard let type = parseType() else { return nil }
                 return .typedVariable(name, type, merge(s, current.span))
             }
             return .variable(name, s)
 
-        case .lparen:
+        case .op(.lparen):
             advance()
             guard let inner = parseAdditive() else { return nil }
-            guard case .rparen = current.kind else {
+            guard case .op(.rparen) = current.kind else {
                 diagnostics.append(Diagnostic(code: .unmatchedParen, severity: .error,
                                               message: "Expected `)`.", span: current.span))
                 return nil
@@ -459,7 +453,7 @@ struct Parser {
             advance()
             return inner
 
-        case .lbracket:
+        case .op(.lbracket):
             return parseBracketed()
 
         case .eof:
@@ -483,6 +477,13 @@ private enum ParseItem {
     case expr(Expr)
 }
 
+/// The words the parser reads as structure rather than as a name. Spelled by
+/// their raw values, which is the only place they are written: the parser
+/// matches through them and `Vocabulary` publishes them for an editor.
+enum Keyword: String, CaseIterable {
+    case `in`, out, `let`, `for`
+}
+
 private func merge(_ a: Span, _ b: Span) -> Span {
     let start = min(a.start, b.start)
     let end = max(a.start + a.length, b.start + b.length)
@@ -493,23 +494,7 @@ private func describe(_ t: Token) -> String {
     switch t.kind {
     case .number(let v):     return "\(v)"
     case .identifier(let s): return s
-    case .plus:              return "+"
-    case .minus:             return "-"
-    case .star:              return "*"
-    case .slash:             return "/"
-    case .percent:           return "%"
-    case .caret:             return "^"
-    case .lparen:            return "("
-    case .rparen:            return ")"
-    case .comma:             return ","
-    case .equals:            return "="
-    case .semicolon:         return ";"
-    case .dot:               return "."
-    case .colon:             return ":"
-    case .lbracket:          return "["
-    case .rbracket:          return "]"
-    case .dotDot:            return ".."
-    case .dotDotLess:        return "..<"
+    case .op(let op):        return op.rawValue
     case .eof:               return "end of input"
     }
 }

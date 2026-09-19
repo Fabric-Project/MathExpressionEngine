@@ -75,7 +75,7 @@ enum Builtins {
 
     static func isFunction(_ name: String) -> Bool { arities[name] != nil }
     static func isConstant(_ name: String) -> Bool { constants[name] != nil }
-    static func isConstructor(_ name: String) -> Bool { name == "vec2" || name == "vec3" || name == "vec4" }
+    static func isConstructor(_ name: String) -> Bool { ValueType.Base.constructed(name) != nil }
 
     static func id(forName name: String) -> FnID? {
         switch name {

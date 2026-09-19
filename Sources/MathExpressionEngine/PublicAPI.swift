@@ -68,6 +68,37 @@ public indirect enum ValueType: Sendable, Equatable {
     case transform, quat
     case array(ValueType)
 
+    /// The types a declaration can name, spelled by their raw values. An array
+    /// is not among them: it is spelled by suffixing one of these with `[]`
+    /// rather than by a name of its own.
+    ///
+    /// Every type name the engine reads or reports is spelled here and nowhere
+    /// else. The parser reads a declaration through it, `name` reports through
+    /// it, constructors are recognised through it, and `Vocabulary` publishes
+    /// it for an editor to colour.
+    public enum Base: String, CaseIterable, Sendable {
+        case float, vec2, vec3, vec4, transform, quat
+
+        /// The type a call to `name` constructs, if that name constructs one.
+        /// The vector types are exactly the ones that do, and each constructs at
+        /// its own width.
+        static func constructed(_ name: String) -> ValueType? {
+            guard let base = Self(rawValue: name), base.type.isVector else { return nil }
+            return base.type
+        }
+
+        public var type: ValueType {
+            switch self {
+            case .float:     .float
+            case .vec2:      .vec2
+            case .vec3:      .vec3
+            case .vec4:      .vec4
+            case .transform: .transform
+            case .quat:      .quat
+            }
+        }
+    }
+
     public var width: Int {
         switch self {
         case .float: return 1
@@ -89,12 +120,12 @@ public indirect enum ValueType: Sendable, Equatable {
 
     public var name: String {
         switch self {
-        case .float: return "float"
-        case .vec2:  return "vec2"
-        case .vec3:  return "vec3"
-        case .vec4:  return "vec4"
-        case .transform: return "transform"
-        case .quat: return "quat"
+        case .float:        return Base.float.rawValue
+        case .vec2:         return Base.vec2.rawValue
+        case .vec3:         return Base.vec3.rawValue
+        case .vec4:         return Base.vec4.rawValue
+        case .transform:    return Base.transform.rawValue
+        case .quat:         return Base.quat.rawValue
         case .array(let t): return "\(t.name)[]"
         }
     }

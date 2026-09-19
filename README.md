@@ -33,9 +33,15 @@ swift test
 Sources/MathExpressionEngine/
   PublicAPI.swift            // Span, Diagnostic, Interface, EngineValue, ValueType, EvalError, CompileResult
   Lexer.swift  AST.swift  Parser.swift  Sema.swift  Builtins.swift  Value.swift  Transform.swift  Suggestions.swift
+  Vocabulary.swift           // the names an editor colours and completes
+Sources/MathExpressionEditorSupport/
+  MathExpressionLanguageSupport.swift  // LanguageConfiguration built from Vocabulary
+  MathExpressionLanguageService.swift  // completions, including names the expression declares
   ReferenceInterpreter.swift // tree-walk oracle
   Tape.swift                 // register-machine bytecode (production)
   Engine.swift               // compile(_:)
+Tests/MathExpressionEditorSupportTests/
+  MathExpressionLanguage
 Tests/MathExpressionEngineTests/
-  Evaluation · Interface · Diagnostics · Property · Differential · Stress · Block · Vector · Array · Transform · Input · InlineTypedInput · Hardening · HostBoundary
+  Evaluation · Interface · Diagnostics · Property · Differential · Stress · Block · Vector · Array · Transform · Input · InlineTypedInput · Hardening · HostBoundary · Vocabulary
 ```

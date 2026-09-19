@@ -184,8 +184,8 @@ private struct Lowerer {
             return dst
 
         case .call(let name, let args, _):
-            if Builtins.isConstructor(name) {
-                let width = name == "vec2" ? 2 : (name == "vec3" ? 3 : 4)
+            if let constructed = ValueType.Base.constructed(name) {
+                let width = constructed.width
                 let regs = args.map { lower($0) }
                 let dst = newRegister()
                 if regs.count == 1 {

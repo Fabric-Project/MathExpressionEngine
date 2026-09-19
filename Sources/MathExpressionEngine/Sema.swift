@@ -41,7 +41,7 @@ func analyze(_ body: Body) -> (interface: Interface, diagnostics: [Diagnostic]) 
     var outputs: [OutputPort] = []
     var outputNamesSeen = Set<String>()
 
-    let functionCandidates = Array(Builtins.arities.keys) + ["vec2", "vec3", "vec4"]
+    let functionCandidates = Array(Builtins.arities.keys) + Vocabulary.constructors
     func unknownFunctionMessage(_ name: String) -> String {
         var message = "Unknown function `\(name)`."
         if let near = nearestName(name, functionCandidates) { message += " Did you mean `\(near)`?" }
@@ -54,18 +54,18 @@ func analyze(_ body: Body) -> (interface: Interface, diagnostics: [Diagnostic]) 
 
     func opSymbol(_ op: BinaryOp) -> String {
         switch op {
-        case .add: return "+"
-        case .sub: return "-"
-        case .mul: return "*"
-        case .div: return "/"
-        case .mod: return "%"
-        case .pow: return "^"
+        case .add: return Token.Operator.plus.rawValue
+        case .sub: return Token.Operator.minus.rawValue
+        case .mul: return Token.Operator.star.rawValue
+        case .div: return Token.Operator.slash.rawValue
+        case .mod: return Token.Operator.percent.rawValue
+        case .pow: return Token.Operator.caret.rawValue
         }
     }
 
     func synthesizeCall(_ name: String, _ argTypes: [ValueType], _ span: Span) -> ValueType? {
-        if Builtins.isConstructor(name) {
-            let width = name == "vec2" ? 2 : (name == "vec3" ? 3 : 4)
+        if let constructed = ValueType.Base.constructed(name) {
+            let width = constructed.width
             if argTypes.count == 1 && argTypes[0] == .float { return ValueType.ofWidth(width) }
             if argTypes.count == width && argTypes.allSatisfy({ $0 == .float }) { return ValueType.ofWidth(width) }
             diag(.argumentCount, "`\(name)` takes \(width) floats or one float — got (\(argTypes.map(\.name).joined(separator: ", "))).", span)
